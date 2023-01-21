@@ -4,17 +4,19 @@
 #include <libraries/Oscillator/Oscillator.h>
 std::vector<Oscillator> oscs;
 
-#define BUFFER_LEN 12000 // BUFFER LENGTH
 
 std::string gFilename = "recording.wav";
 AudioFileWriter* fileOut;
 std::vector<float> fileBuffer;
 
 unsigned int chs = 16;
+// how many samples to write to disk at once
+unsigned int bufferFrames = 8192;
+
 bool setup(BelaContext *context, void *userData)
 {
 	fileOut = new AudioFileWriter;
-	if(fileOut->setup(gFilename, BUFFER_LEN, chs, context->audioSampleRate))
+	if(fileOut->setup(gFilename, bufferFrames, chs, context->audioSampleRate))
 		return false;
 	printf("Number of chs to disk %d\n", chs);
 	fileBuffer.resize(context->audioFrames * chs);
