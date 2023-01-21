@@ -294,10 +294,14 @@ void AudioFile::threadLoop()
 {
 	while(!stop)
 	{
+		fflush(stdout);
 		if(ioBuffer != ioBufferOld)
+		{
 			io(internalBuffers[ioBuffer]);
-		ioBufferOld = ioBuffer;
-		usleep(100000);
+			ioBufferOld = ioBuffer;
+		}
+		else
+			usleep(100000);
 	}
 }
 
