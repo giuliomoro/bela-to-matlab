@@ -1,30 +1,47 @@
 while(1)
-
+    if exist('t')
+        % properly close any open socket
+        fclose(t)
+    end
     t = tcpip('0.0.0.0', 4000, 'NetworkRole', 'server');
-    t.InputBufferSize = 200000;
+    t.InputBufferSize = 8000000; % if buffer usage in the prints below goes above 60%, increase this and blocksize_bytes to avoid dropouts
     nchs = 16; % number of channels
     Fs = 44100;
+    oneSecond = nchs * 2 * Fs;
+    blocksize_bytes = oneSecond * 1; % number of bytes read at once. Larger blocks give higher latency but they may allow to avoid underruns.
+    
     T = 1/Fs;
     time = 0:T:(t.InputBufferSize/2/nchs)*T-T;
     fprintf('Waiting for incoming connection ...')
     fopen(t);
     fprintf('Connected\n')
-    timeout = 30;
+    timeout = 45;
     count = 0;
     samplesElapsed = 0;
-
+    fullX = nan(0, nchs);
+    while(0)
+        if(t.BytesAvailable > 1)
+           fread(t, t.BytesAvailable);
+           pause(0.1);
+        end
+    end
     while (1)
-        if(t.BytesAvailable > 65536)
-            fprintf('%d_', t.BytesAvailable);
-            data = fread(t, 65536);
+        if(t.BytesAvailable > blocksize_bytes)
+            if(t.BytesAvailable == t.InputBufferSize)
+                fprintf(2, 'Input buffer is full. A dropout likely occurred. Reduce in-loop computation and/or increase blocksize_bytes and/or increase t.InputBufferSize')
+            end
+            fprintf('read: %d, buffer: %d bytes (%.0f%%)\n', blocksize_bytes, t.BytesAvailable, 100 * t.BytesAvailable / t.InputBufferSize);
+            data = fread(t, blocksize_bytes);
             x = bytes_to_int16_to_float(data, nchs);
-            samplesElapsed = samplesElapsed + size(x, 1);
-            plot(samplesElapsed * T + time(1:size(x, 1)), x)
-            xlabel('T[s]')
-            ylabel('Amplitude')
+            X = sum(x, 2);
+%             fullX = cat(1, fullX, x);
+%             samplesElapsed = samplesElapsed + size(x, 1);
+%             plot(samplesElapsed * T + time(1:size(x, 1)), x)
+%             xlabel('T[s]')
+%             ylabel('Amplitude')
             count = 0;
         else
-            fwrite(t, 'ping')
+%             fwrite(t, 'ping')
             pause(0.1)
             fprintf('.')
             count = count + 1;
