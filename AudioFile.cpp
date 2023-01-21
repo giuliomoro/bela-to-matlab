@@ -17,22 +17,147 @@ std::vector<float>& AudioFile::getRtBuffer()
 #include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-struct sf_socket_t {
-	int sock;
+#include <poll.h>
+class TcpSocket {
+private:
+	int sock = -1;
+	bool autoReconnect;
+	bool isConnected = false;
+	addrinfo hints;
+	addrinfo* p = nullptr;
+	void cleanup()
+	{
+		freeaddrinfo(p);
+		p = nullptr;
+		if(sock >= 0)
+			close(sock);
+		sock = -1;
+	}
+
+	int doConnect()
+	{
+		printf("doconnect\n");
+		isConnected = false;
+		close(sock);
+		// socket() call creates a new socket and returns its descriptor
+		sock = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+		if (sock < 0) {
+			fprintf(stderr, "Error while creating socket\n");
+			return 1;
+		}
+		const unsigned int kBufferSize = 1 << 22;
+		int ret = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &kBufferSize, sizeof(kBufferSize));
+		ret |= setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &kBufferSize, sizeof(kBufferSize));
+		unsigned int sz;
+		socklen_t actualLength = sizeof(sz);
+		ret |= getsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sz, &actualLength);
+		if(ret)
+			fprintf(stderr, "setsockopt() failed\n");
+		//printf("retrived si %d %d\n", ret, sz);
+		// connect() call tries to establish a TCP connection to the specified server
+		if(connect(sock, p->ai_addr, p->ai_addrlen))
+		{
+			fprintf(stderr, "Error while connecting socket: %d %s\n", errno, strerror(errno));
+			return 1;
+		}
+		isConnected = true;
+		return 0;
+	}
+public:
+	~TcpSocket()
+	{
+		cleanup();
+	}
+
+	int setup(const std::string& ipAddress, const std::string& portNum, bool autoReconnect = true)
+	{
+		cleanup();
+		this->autoReconnect = autoReconnect;
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family   = AF_UNSPEC;
+		hints.ai_socktype = SOCK_STREAM;
+		hints.ai_flags	= AI_PASSIVE;
+
+		int gAddRes = getaddrinfo(ipAddress.c_str(), portNum.c_str(), &hints, &p);
+		if (gAddRes != 0) {
+			fprintf(stderr, "%s\n", gai_strerror(gAddRes));
+			return 1;
+		}
+
+		if (p == NULL) {
+			fprintf(stderr, "No addresses found\n");
+			return 1;
+		}
+		return doConnect();
+	}
+	int write(const void* data, size_t size)
+	{
+		unsigned int n = 2;
+		int ret = -1;
+		while(n--)
+		{
+			if(isConnected)
+			{
+				struct pollfd pollfds = {
+					.fd = sock,
+					.events = POLLOUT,
+					// according to the manual, one should poll()
+					// for POLLIN and then read with recv() and
+					// obtain a 0 and that would mean that the peer
+					// has shut down the connection. But this
+					// doesn't seem to work, so we detect a remote's
+					// disconnection when an error happens while writing
+					// (which may happen after the socket's buffer has
+					// been filled)
+				};
+				nfds_t nfds = 1;
+				int pollRet = poll(&pollfds, nfds, 100);
+				if(1 == pollRet)
+				{
+					if(pollfds.revents & POLLERR)
+						fprintf(stderr, "poll() returned POLLERR\n");
+					ret = send(sock, data, size, MSG_NOSIGNAL); // MSG_NOSIGNAL: avoid SIGPIPE if remote has closed connection
+					if(ret > 0) // all good!
+						break;
+					else {
+						isConnected = false;
+						fprintf(stderr, "send() returned %d %s\n", errno, strerror(errno));
+					}
+				} else
+					// probably ran out of space in the socket's buffer
+					isConnected = false;
+			}
+			if(!isConnected && autoReconnect && (1 == n))
+			{
+				// something failed (just now or earlier). Give
+				// it a chance: try connect and try sending again in
+				// the next iteration of the loop
+				doConnect();
+			}
+		}
+		return ret;
+	}
+	int read(void* data, size_t size)
+	{
+		// TODO: handle reconnection
+		return recv(sock, data, size, 0);
+	}
+};
+
+struct socket_data_t {
+	TcpSocket socket;
 	unsigned int count;
 };
 
-static inline sf_socket_t* to_sf_socket(void* user_data)
+static inline socket_data_t* to_socket_data(void* user_data)
 {
-	return static_cast<sf_socket_t*>(user_data);
+	return static_cast<socket_data_t*>(user_data);
 }
 
 static sf_count_t sf_socket_get_filelen(void *user_data)
 {
-	printf("SOCKET_GET_FILELEN\n");
-	return 0;
-	sf_socket_t* sf_socket = to_sf_socket(user_data);
-	return sf_socket->count;
+	socket_data_t* data = to_socket_data(user_data);
+	return data->count;
 }
 
 static sf_count_t sf_socket_seek(sf_count_t offset, int whence, void *user_data)
@@ -42,72 +167,33 @@ static sf_count_t sf_socket_seek(sf_count_t offset, int whence, void *user_data)
 
 static sf_count_t sf_socket_read(void *ptr, sf_count_t count, void *user_data)
 {
-	printf("SOCKET_READ\n");
-	sf_socket_t* sf_socket = to_sf_socket(user_data);
-	int ret = recv(sf_socket->sock, ptr, count, 0);
+	socket_data_t* data = to_socket_data(user_data);
+	int ret = data->socket.read(ptr, count);
 	if(ret >= 0)
-		sf_socket->count += ret;
+		data->count += ret;
 	return ret;
 }
 
-static sf_count_t sf_socket_write (const void *ptr, sf_count_t count, void *user_data)
+static sf_count_t sf_socket_write(const void *ptr, sf_count_t count, void *user_data)
 {
-	sf_socket_t* sf_socket = to_sf_socket(user_data);
-	int ret = write(sf_socket->sock, ptr, count);
-	//printf("W %d\n", ret);
+	socket_data_t* data = to_socket_data(user_data);
+	int ret = data->socket.write(ptr, count);
 	if(ret >= 0)
-		sf_socket->count += ret;
+		data->count += ret;
+	else
+		fprintf(stderr, "sf_socket_write: %d\n", ret);
 	return ret;
 }
 
 static sf_count_t sf_socket_tell(void *user_data)
 {
-	printf("SOCKET_TELL\n");
-	sf_socket_t* sf_socket = to_sf_socket(user_data);
-	return sf_socket->count;
+	socket_data_t* data = to_socket_data(user_data);
+	return data->count;
 }
 
-static int sf_socket_setup(sf_socket_t* data, const char* ipAddress, const char* portNum)
-{
-	if(!data)
-		return 1;
-	data->count = 0;
-	addrinfo hints, *p;
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family   = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags	= AI_PASSIVE;
-
-	int gAddRes = getaddrinfo(ipAddress, portNum, &hints, &p);
-	if (gAddRes != 0) {
-		fprintf(stderr, "%s\n", gai_strerror(gAddRes));
-		return 1;
-	}
-
-	if (p == NULL) {
-		fprintf(stderr, "No addresses found\n");
-		return 1;
-	}
-
-	// socket() call creates a new socket and returns its descriptor
-	int sockFD = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-	if (sockFD < 0) {
-		fprintf(stderr, "Error while creating socket\n");
-		return 1;
-	}
-
-	// connect() call tries to establish a TCP connection to the specified server
-	int connectR = connect(sockFD, p->ai_addr, p->ai_addrlen);
-	if (connectR == -1) {
-		close(sockFD);
-		fprintf(stderr, "Error while connecting socket\n");
-		return 1;
-	}
-	data->sock = sockFD;
-	return 0;
-}
-
-sf_socket_t mysock;
+static socket_data_t mydata = {
+	.count = 0,
+};
 
 #include <iostream>
 #include <fstream>
@@ -123,7 +209,6 @@ void print_info(SF_INFO * sfinfo) {
 	std::cout << "Seekable   " << (*sfinfo).seekable << std::endl;
 }
 
-int sf_errno;
 int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size_t channels /* = 0 */, unsigned int sampleRate /* = 0 */)
 {
 	cleanup();
@@ -143,10 +228,9 @@ int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size
 	//sndfile = sf_open(path.c_str(), sf_mode, &sfinfo);
 	std::string server = "192.168.7.1";
 	std::string port = "4000";
-	if(sf_socket_setup(&mysock, server.c_str(), port.c_str()))
+	if(mydata.socket.setup(server, port))
 	{
-		fprintf(stderr, "Cannot connect to %s:%s\n", server.c_str(), port.c_str());
-		return 1;
+		fprintf(stderr, "Cannot connect to %s:%s, will try again later\n", server.c_str(), port.c_str());
 	}
 	SF_VIRTUAL_IO sf_virtual_socket = {
 		.get_filelen = sf_socket_get_filelen,
@@ -155,9 +239,8 @@ int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size
 		.write = sf_socket_write,
 		.tell = sf_socket_tell,
 	};
-	sndfile = sf_open_virtual(&sf_virtual_socket, sf_mode, &sfinfo, &mysock);
+	sndfile = sf_open_virtual(&sf_virtual_socket, sf_mode, &sfinfo, &mydata);
 	print_info(&sfinfo);
-	printf("sndfile: %p %d\n", sndfile, sf_errno);
 	if(!sndfile)
 		return 1;
 	rtIdx = 0;
