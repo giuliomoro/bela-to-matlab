@@ -132,7 +132,8 @@ public:
 	 *
 	 * @param buffer the destination buffer. Its size() must be a multiple
 	 * of getChannels().
-	 */void getSamples(std::vector<float>& buffer);
+	 */
+	void getSamples(std::vector<float>& buffer);
 	/**
 	 * Write interleaved samples from the file to the destination.
 	 *

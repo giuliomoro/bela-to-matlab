@@ -340,7 +340,6 @@ void AudioFileReader::io(std::vector<float>& buffer)
 {
 	size_t count = buffer.size();
 	size_t dstPtr = 0;
-	int readcount = 0;
 	while(count)
 	{
 		size_t toRead = count;
@@ -457,7 +456,6 @@ void AudioFileWriter::setSamples(float const * src, size_t samplesCount)
 
 void AudioFileWriter::io(std::vector<float>& buffer)
 {
-	size_t count = buffer.size();
 	sf_count_t ret = sf_write_float(sndfile, buffer.data(), buffer.size());
 	if(ret != sf_count_t(buffer.size()))
 		fprintf(stderr, "Error while writing to file: %lld\n", ret);
