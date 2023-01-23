@@ -38,7 +38,8 @@ private:
 	{
 		printf("doconnect\n");
 		isConnected = false;
-		close(sock);
+		if(sock >= 0)
+			close(sock);
 		// socket() call creates a new socket and returns its descriptor
 		sock = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (sock < 0) {
