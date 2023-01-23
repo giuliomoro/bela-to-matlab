@@ -295,7 +295,6 @@ void AudioFile::threadLoop()
 {
 	while(!stop)
 	{
-		fflush(stdout);
 		if(ioBuffer != ioBufferOld)
 		{
 			io(internalBuffers[ioBuffer]);
