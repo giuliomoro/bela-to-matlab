@@ -89,7 +89,7 @@ protected:
 		kWriteSocket,
 	} Mode;
 protected:
-	int setup(const std::string& path, size_t bufferSize, Mode mode, size_t channels = 0, unsigned int sampleRate = 0);
+	int setup(const std::string& path, size_t bufferFrames, Mode mode, size_t channels = 0, unsigned int sampleRate = 0);
 	template <typename T>
 	void increment(T& bufferIdx);
 	std::vector<float>& getRtBuffer();
@@ -127,11 +127,12 @@ public:
 	 * Open a file and prepare to stream it from disk.
 	 *
 	 * @param path Path to the file
-	 * @param bufferSize the size of the internal buffer. If this is larger
+	 * @param bufferFrames the size in frames of the internal buffer.
+	 * If this is larger
 	 * than the file itself, the whole file will be loaded in memory, otherwise
 	 * the file will be read from disk from a separate thread.
 	 */
-	int setup(const std::string& path, size_t bufferSize);
+	int setup(const std::string& path, size_t bufferFrames);
 	/**
 	 * Write interleaved samples from the file to the destination.
 	 *
@@ -165,10 +166,10 @@ public:
 	 * Open a file and prepare to write to it.
 	 *
 	 * @param path Path to the file
-	 * @param bufferSize the size of the internal buffer.
+	 * @param bufferFrames the size in frames of the internal buffer
 	 * @param channels the number of channels
 	 */
-	int setup(const std::string& path, size_t bufferSize, size_t channels, unsigned int sampleRate);
+	int setup(const std::string& path, size_t bufferFrames, size_t channels, unsigned int sampleRate);
 	/**
 	 * Push interleaved samples to the file for writing
 	 *

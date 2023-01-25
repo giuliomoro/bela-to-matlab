@@ -245,7 +245,7 @@ void print_info(SF_INFO * sfinfo) {
 	std::cout << "Seekable   " << (*sfinfo).seekable << std::endl;
 }
 
-int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size_t channels /* = 0 */, unsigned int sampleRate /* = 0 */)
+int AudioFile::setup(const std::string& path, size_t bufferFrames, Mode mode, size_t channels /* = 0 */, unsigned int sampleRate /* = 0 */)
 {
 	this->path = path;
 	if(StringUtils::split(path, ':', true).size() == 2)
@@ -300,7 +300,7 @@ int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size
 	size_t numBufs = 10;
 	rtBuffer = 0;
 	ioBuffer = 0;
-	if(kRead == mode && bufferSize * numBufs >= numSamples)
+	if(kRead == mode && bufferFrames * numBufs >= numSamples)
 	{
 		ramOnly = true;
 		// empty other buffers, we will only use the first one
@@ -430,10 +430,10 @@ AudioFile::~AudioFile()
 	cleanup();
 }
 
-int AudioFileReader::setup(const std::string& path, size_t bufferSize)
+int AudioFileReader::setup(const std::string& path, size_t bufferFrames)
 {
 	loop = false;
-	return AudioFile::setup(path, bufferSize, kRead);
+	return AudioFile::setup(path, bufferFrames, kRead);
 }
 
 int AudioFileReader::setLoop(bool doLoop)
@@ -541,9 +541,9 @@ void AudioFileReader::getSamples(float* dst, size_t samplesCount)
 	}
 }
 
-int AudioFileWriter::setup(const std::string& path, size_t bufferSize, size_t channels, unsigned int sampleRate)
+int AudioFileWriter::setup(const std::string& path, size_t bufferFrames, size_t channels, unsigned int sampleRate)
 {
-	return AudioFile::setup(path, bufferSize, kWrite, channels, sampleRate);
+	return AudioFile::setup(path, bufferFrames, kWrite, channels, sampleRate);
 }
 
 void AudioFileWriter::setSamples(std::vector<float>& buffer)
