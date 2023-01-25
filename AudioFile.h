@@ -113,6 +113,7 @@ protected:
 	size_t rtIdx;
 	SNDFILE* sndfile = NULL;
 	SF_INFO sfinfo = { 0 };
+	bool printBufferDetails = false;
 };
 
 class AudioFileReader : public AudioFile

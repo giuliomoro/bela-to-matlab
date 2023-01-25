@@ -1,6 +1,7 @@
 #include "AudioFile.h"
 #include <unistd.h>
 #include <string.h>
+#include <MiscUtilities.h>
 
 std::vector<float>& AudioFile::getRtBuffer()
 {
@@ -17,12 +18,19 @@ std::vector<float>& AudioFile::getRtBuffer()
 #include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h> // SIOCOUTQ
+//#define USE_POLL
+#ifdef USE_POLL
 #include <poll.h>
+#endif // USE_POLL
+
 class TcpSocket {
 private:
 	int sock = -1;
 	bool autoReconnect;
 	bool isConnected = false;
+	size_t sockBufferSize;
 	addrinfo hints;
 	addrinfo* p = nullptr;
 	void cleanup()
@@ -36,7 +44,6 @@ private:
 
 	int doConnect()
 	{
-		printf("doconnect\n");
 		isConnected = false;
 		if(sock >= 0)
 			close(sock);
@@ -46,15 +53,23 @@ private:
 			fprintf(stderr, "Error while creating socket\n");
 			return 1;
 		}
-		const unsigned int kBufferSize = 1 << 22;
-		int ret = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &kBufferSize, sizeof(kBufferSize));
-		ret |= setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &kBufferSize, sizeof(kBufferSize));
+		const unsigned int kReqBufferSize = 1 << 23;
+		int ret = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &kReqBufferSize, sizeof(kReqBufferSize));
 		unsigned int sz;
 		socklen_t actualLength = sizeof(sz);
 		ret |= getsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sz, &actualLength);
-		if(ret)
-			fprintf(stderr, "setsockopt() failed\n");
-		//printf("retrived si %d %d\n", ret, sz);
+		if(ret) {
+			fprintf(stderr, "{s,g}etsockopt() failed\n");
+			sockBufferSize = 1; // dummy
+		} else {
+			// this / 2 is found experimentally by looking at the buffer filling up:
+			// It is known that Linux will allocate twice the memory requested via setsockopt()
+			// but I would expect the value returned by
+			// getsockopt() would be the real one; however we see
+			// that the buffer fills up at sz/2
+			sockBufferSize = sz / 2;
+			printf("socket SO_SNDBUF: %zu\n", sockBufferSize);
+		}
 		// connect() call tries to establish a TCP connection to the specified server
 		if(connect(sock, p->ai_addr, p->ai_addrlen))
 		{
@@ -72,6 +87,8 @@ public:
 
 	int setup(const std::string& ipAddress, const std::string& portNum, bool autoReconnect = true)
 	{
+		// increase max write socket buffer size
+		IoUtils::writeTextFile("/proc/sys/net/core/wmem_max", std::to_string(1024 * 1024 * 64)); // 64MiB
 		cleanup();
 		this->autoReconnect = autoReconnect;
 		memset(&hints, 0, sizeof(hints));
@@ -99,6 +116,7 @@ public:
 		{
 			if(isConnected)
 			{
+#ifdef USE_POLL
 				struct pollfd pollfds = {
 					.fd = sock,
 					.events = POLLOUT,
@@ -113,10 +131,28 @@ public:
 				};
 				nfds_t nfds = 1;
 				int pollRet = poll(&pollfds, nfds, 100);
+#else
+				// we use socket() because it tells us how long we slept for
+				// and we can use that to detect anomalies
+				fd_set set;
+				FD_ZERO(&set);
+				FD_SET(sock, &set);
+				const unsigned long int kInitialTimeout = 100000;
+				struct timeval timeout = {
+					.tv_sec = 0,
+					.tv_usec = kInitialTimeout,
+				};
+				int pollRet = select(sock + 1, NULL, &set, NULL, &timeout);
+				float to = (kInitialTimeout - timeout.tv_usec) / 1000.f;
+				if(to > 10)
+					printf("to: %.0fms -- ", to);
+#endif
 				if(1 == pollRet)
 				{
+#ifdef USE_POLL
 					if(pollfds.revents & POLLERR)
 						fprintf(stderr, "poll() returned POLLERR\n");
+#endif
 					ret = send(sock, data, size, MSG_NOSIGNAL); // MSG_NOSIGNAL: avoid SIGPIPE if remote has closed connection
 					if(ret > 0) // all good!
 						break;
@@ -133,6 +169,7 @@ public:
 				// something failed (just now or earlier). Give
 				// it a chance: try connect and try sending again in
 				// the next iteration of the loop
+				fprintf(stderr,  "Could not write, buffer level is at %.2f%%\n", writeStat() * 100);
 				doConnect();
 			}
 		}
@@ -142,6 +179,15 @@ public:
 	{
 		// TODO: handle reconnection
 		return recv(sock, data, size, 0);
+	}
+	float writeStat()
+	{
+		size_t val;
+		int ioret = ioctl(sock, SIOCOUTQ, &val);
+		if(!ioret)
+			return val / float(sockBufferSize);
+		else
+			return -1;
 	}
 };
 
@@ -233,6 +279,7 @@ int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size
 	{
 		fprintf(stderr, "Cannot connect to %s:%s, will try again later\n", server.c_str(), port.c_str());
 	}
+	printBufferDetails = true;
 	SF_VIRTUAL_IO sf_virtual_socket = {
 		.get_filelen = sf_socket_get_filelen,
 		.seek = sf_socket_seek,
@@ -284,24 +331,79 @@ void AudioFile::cleanup()
 	sf_close(sndfile);
 }
 
+extern "C" {
+int rt_fprintf(FILE *stream, const char *format, ...);
+};
+
 void AudioFile::scheduleIo()
 {
+	if(ioBuffer == !ioBufferOld)
+	{
+		// if you don't have rt_fprintf, turn this into fprintf
+		rt_fprintf(stderr, "_______%.2f%%\n", mydata.socket.writeStat() * 100);
+		rt_fprintf(stderr, "AudioFile: underrun detected\n");
+	}
 	// schedule thread
-	// TODO: detect underrun
 	ioBuffer = !ioBuffer;
 }
 
+static const long long unsigned int kNsInSec = 1000000000;
+static const long long unsigned int kNsInMs = 1000000;
+static long long unsigned int timespec_sub(const struct timespec *a, const struct timespec *b)
+{
+	long long unsigned int diff;
+	diff = (a->tv_sec - b->tv_sec) * kNsInSec;
+	diff += a->tv_nsec - b->tv_nsec;
+	return diff;
+}
+
+static long long unsigned int timespec_to_llu(const struct timespec *a)
+{
+	return a->tv_sec * kNsInSec + a->tv_nsec;
+}
+
+#include <time.h>
+
 void AudioFile::threadLoop()
 {
+	bool inited = false;
+	long long unsigned int totalBusy = 0;
+	struct timespec start;
 	while(!stop)
 	{
 		if(ioBuffer != ioBufferOld)
 		{
+			if(printBufferDetails)
+				printf("buf: %5.2f%% -- ", mydata.socket.writeStat() * 100);
+			struct timespec begin;
+			struct timespec end;
+			if(printBufferDetails)
+			{
+				if(clock_gettime(CLOCK_MONOTONIC, &begin))
+					fprintf(stderr, "Error in clock_gettime(): %d %s\n", errno, strerror(errno));
+				if(!inited)
+				{
+					start = begin;
+					inited = true;
+				}
+			}
 			io(internalBuffers[ioBuffer]);
+			if(printBufferDetails)
+			{
+				if(clock_gettime(CLOCK_MONOTONIC, &end))
+					fprintf(stderr, "Error in clock_gettime(): %d %s\n", errno, strerror(errno));
+				printf("%5.2f%% ", mydata.socket.writeStat() * 100);
+				long long unsigned int busy = timespec_sub(&end, &begin);
+				double busyMs = busy / double(kNsInMs);
+				long long unsigned int totalRunning = timespec_sub(&end, &start);
+				printf("timeInIo: %6.1fms (%5.2f%% av)\n", busyMs, totalBusy/double(totalRunning) * 100.f);
+				totalBusy += busy;
+				//printf("start: %llu, begin:%llu, end: %llu, totalBusy: %llu, totalRunning: %llu\n", timespec_to_llu(&start), timespec_to_llu(&begin), timespec_to_llu(&end), totalBusy, totalRunning);
+			}
 			ioBufferOld = ioBuffer;
 		}
 		else
-			usleep(100000);
+			usleep(50000);
 	}
 }
 
