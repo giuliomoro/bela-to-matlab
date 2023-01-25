@@ -68,7 +68,6 @@ private:
 			// getsockopt() would be the real one; however we see
 			// that the buffer fills up at sz/2
 			sockBufferSize = sz / 2;
-			printf("socket SO_SNDBUF: %zu\n", sockBufferSize);
 		}
 		// connect() call tries to establish a TCP connection to the specified server
 		if(connect(sock, p->ai_addr, p->ai_addrlen))
@@ -191,6 +190,11 @@ public:
 	}
 };
 
+struct AudioFile::VirtualData {
+	TcpSocket socket;
+	unsigned int count;
+};
+
 struct socket_data_t {
 	TcpSocket socket;
 	unsigned int count;
@@ -238,10 +242,6 @@ static sf_count_t sf_socket_tell(void *user_data)
 	return data->count;
 }
 
-static socket_data_t mydata = {
-	.count = 0,
-};
-
 #include <iostream>
 #include <fstream>
 #include "/root/libsndfile/include/sndfile.h"
@@ -258,39 +258,53 @@ void print_info(SF_INFO * sfinfo) {
 
 int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size_t channels /* = 0 */, unsigned int sampleRate /* = 0 */)
 {
+	this->path = path;
+	if(StringUtils::split(path, ':', true).size() == 2)
+		mode = kWriteSocket;
 	cleanup();
 	int sf_mode;
-	switch(mode){
-	case kWrite:
+	if(kWrite == mode || kWriteSocket == mode)
+	{
 		sf_mode = SFM_WRITE;
 		sfinfo.samplerate = sampleRate;
-		sfinfo.format = SF_FORMAT_RAW | SF_FORMAT_PCM_16;
 		sfinfo.channels = channels;
-		break;
-	case kRead:
+	} else if(kRead == mode) {
 		sfinfo.format = 0;
 		sf_mode = SFM_READ;
-		break;
 	}
-	//sndfile = sf_open(path.c_str(), sf_mode, &sfinfo);
-	std::string server = "192.168.7.1";
-	std::string port = "4000";
-	if(mydata.socket.setup(server, port))
+	if(kWrite == mode)
+		sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+	else if(kWriteSocket == mode)
+		sfinfo.format = SF_FORMAT_RAW | SF_FORMAT_PCM_16;
+	if(kWrite == mode || kRead == mode)
 	{
-		fprintf(stderr, "Cannot connect to %s:%s, will try again later\n", server.c_str(), port.c_str());
+		sndfile = sf_open(path.c_str(), sf_mode, &sfinfo);
+	} else if (kWriteSocket == mode) {
+		std::vector<std::string> tokens = StringUtils::split(path, ':');
+		std::string server = tokens[0];
+		std::string port = tokens[1];
+		virtualData = new VirtualData;
+		virtualData->count = 0;
+		if(virtualData->socket.setup(server, port))
+		{
+			fprintf(stderr, "Cannot connect to %s:%s, will try again later\n", server.c_str(), port.c_str());
+		}
+		printBufferDetails = true;
+		SF_VIRTUAL_IO sf_virtual_socket = {
+			.get_filelen = sf_socket_get_filelen,
+			.seek = sf_socket_seek,
+			.read = sf_socket_read,
+			.write = sf_socket_write,
+			.tell = sf_socket_tell,
+		};
+		sndfile = sf_open_virtual(&sf_virtual_socket, sf_mode, &sfinfo, virtualData);
+		print_info(&sfinfo);
 	}
-	printBufferDetails = true;
-	SF_VIRTUAL_IO sf_virtual_socket = {
-		.get_filelen = sf_socket_get_filelen,
-		.seek = sf_socket_seek,
-		.read = sf_socket_read,
-		.write = sf_socket_write,
-		.tell = sf_socket_tell,
-	};
-	sndfile = sf_open_virtual(&sf_virtual_socket, sf_mode, &sfinfo, &mydata);
-	print_info(&sfinfo);
 	if(!sndfile)
+	{
+		fprintf(stderr, "Error while opening sndfile at %s\n", path.c_str());
 		return 1;
+	}
 	rtIdx = 0;
 	ramOnly = false;
 	ioBuffer = 0;
@@ -329,6 +343,9 @@ void AudioFile::cleanup()
 	if(diskIo.joinable())
 		diskIo.join();
 	sf_close(sndfile);
+	sndfile = NULL;
+	delete virtualData;
+	virtualData = nullptr;
 }
 
 extern "C" {
@@ -340,8 +357,9 @@ void AudioFile::scheduleIo()
 	if(ioBuffer == !ioBufferOld)
 	{
 		// if you don't have rt_fprintf, turn this into fprintf
-		rt_fprintf(stderr, "_______%.2f%%\n", mydata.socket.writeStat() * 100);
-		rt_fprintf(stderr, "AudioFile: underrun detected\n");
+		if(virtualData)
+			rt_fprintf(stderr, "_______%.2f%%\n", virtualData->socket.writeStat() * 100);
+		rt_fprintf(stderr, "AudioFile: underrun detected on %s\n", path.c_str());
 	}
 	// schedule thread
 	ioBuffer = !ioBuffer;
@@ -369,12 +387,13 @@ void AudioFile::threadLoop()
 	bool inited = false;
 	long long unsigned int totalBusy = 0;
 	struct timespec start;
+	printBufferDetails = 1;
 	while(!stop)
 	{
 		if(ioBuffer != ioBufferOld)
 		{
-			if(printBufferDetails)
-				printf("buf: %5.2f%% -- ", mydata.socket.writeStat() * 100);
+			if(printBufferDetails && virtualData)
+				printf("buf: %5.2f%% -- ", virtualData->socket.writeStat() * 100);
 			struct timespec begin;
 			struct timespec end;
 			if(printBufferDetails)
@@ -392,7 +411,8 @@ void AudioFile::threadLoop()
 			{
 				if(clock_gettime(CLOCK_MONOTONIC, &end))
 					fprintf(stderr, "Error in clock_gettime(): %d %s\n", errno, strerror(errno));
-				printf("%5.2f%% ", mydata.socket.writeStat() * 100);
+				if(virtualData)
+					printf("%5.2f%% ", virtualData->socket.writeStat() * 100);
 				long long unsigned int busy = timespec_sub(&end, &begin);
 				double busyMs = busy / double(kNsInMs);
 				long long unsigned int totalRunning = timespec_sub(&end, &start);

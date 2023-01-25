@@ -86,6 +86,7 @@ protected:
 	typedef enum {
 		kRead,
 		kWrite,
+		kWriteSocket,
 	} Mode;
 	enum { kNumBufs = 2};
 protected:
@@ -100,7 +101,6 @@ private:
 protected:
 	volatile size_t ioBuffer;
 	size_t ioBufferOld;
-protected:
 	void scheduleIo();
 	std::vector<float>& getRtBuffer();
 	std::array<std::vector<float>,kNumBufs> internalBuffers;
@@ -114,6 +114,9 @@ protected:
 	SNDFILE* sndfile = NULL;
 	SF_INFO sfinfo = { 0 };
 	bool printBufferDetails = false;
+	struct VirtualData;
+	VirtualData* virtualData = nullptr;
+	std::string path;
 };
 
 class AudioFileReader : public AudioFile
