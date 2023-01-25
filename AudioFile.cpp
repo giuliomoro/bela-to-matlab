@@ -3,6 +3,16 @@
 #include <string.h>
 #include <MiscUtilities.h>
 
+std::vector<float>& AudioFile::getRtBuffer()
+{
+       size_t idx;
+       if(ramOnly)
+               idx = 0;
+       else
+               idx = rtBuffer;
+       return internalBuffers[idx];
+}
+
 // socket code adapted from https://riptutorial.com/cplusplus/example/24000/hello-tcp-client
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -509,7 +519,7 @@ void AudioFileReader::getSamples(float* dst, size_t samplesCount)
 	size_t n = 0;
 	while(n < samplesCount)
 	{
-		auto& inBuf = internalBuffers[rtBuffer];
+		auto& inBuf = getRtBuffer();
 		size_t inBufEnd = ramOnly ?
 			(loop ? loopStop * getChannels() : inBuf.size())
 			: inBuf.size();
@@ -532,7 +542,7 @@ void AudioFileReader::getSamples(float* dst, size_t samplesCount)
 				}
 			} else {
 				rtIdx = 0;
-				scheduleIo(); // this will give us a new rtBuffer
+				scheduleIo(); // this will give us a new inBuf
 			}
 		}
 		if(!done){
@@ -556,7 +566,7 @@ void AudioFileWriter::setSamples(float const * src, size_t samplesCount)
 	size_t n = 0;
 	while(n < samplesCount)
 	{
-		auto& outBuf = internalBuffers[rtBuffer];
+		auto& outBuf = getRtBuffer();
 		bool done = false;
 		for(; n < samplesCount && rtIdx < outBuf.size(); ++n)
 		{
@@ -566,7 +576,7 @@ void AudioFileWriter::setSamples(float const * src, size_t samplesCount)
 		if(rtIdx == outBuf.size())
 		{
 			rtIdx = 0;
-			scheduleIo(); // this will give us a new rtBuffer
+			scheduleIo(); // this will give us a new outBuf
 		}
 		if(!done){
 			break;
