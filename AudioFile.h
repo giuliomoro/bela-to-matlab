@@ -76,7 +76,7 @@ namespace AudioFileUtilities {
 	std::vector<float> loadMono(const std::string& file);
 };
 
-#include </root/libsndfile/include/sndfile.h>
+#include <libraries/sndfile/sndfile.h>
 #include <thread>
 #include <array>
 

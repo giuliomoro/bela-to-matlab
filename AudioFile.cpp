@@ -234,7 +234,6 @@ static sf_count_t sf_socket_tell(void *user_data)
 
 #include <iostream>
 #include <fstream>
-#include "/root/libsndfile/include/sndfile.h"
 
 void print_info(SF_INFO * sfinfo) {
 	std::cout << "---------/// INFO ///---------" << std::endl;

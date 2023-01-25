@@ -1,8 +1,9 @@
-#include "/root/libsndfile/include/sndfile.h"
+#include <libraries/sndfile/sndfile.h>
 #include "AudioFile.h"
 #include <unistd.h> //for sync
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 namespace AudioFileUtilities {
 
