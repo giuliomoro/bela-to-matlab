@@ -10,8 +10,10 @@ AudioFileWriter* fileOut;
 std::vector<float> fileBuffer;
 
 unsigned int chs = 16;
-// how many samples to write to disk at once
-unsigned int bufferFrames = 8192;
+// size of internal buffer for writing to network and file.
+// It affects latency.
+// Increase if you get `AudioFile: underrun detected`
+unsigned int bufferFrames = 32768;
 
 bool setup(BelaContext *context, void *userData)
 {
