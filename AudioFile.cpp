@@ -3,17 +3,7 @@
 #include <string.h>
 #include <MiscUtilities.h>
 
-std::vector<float>& AudioFile::getRtBuffer()
-{
-	size_t idx;
-	if(ramOnly)
-		idx = 0;
-	else
-		idx = !ioBuffer;
-	return internalBuffers[idx];
-}
-
-// socket code from https://riptutorial.com/cplusplus/example/24000/hello-tcp-client
+// socket code adapted from https://riptutorial.com/cplusplus/example/24000/hello-tcp-client
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/types.h>
@@ -168,7 +158,7 @@ public:
 				// something failed (just now or earlier). Give
 				// it a chance: try connect and try sending again in
 				// the next iteration of the loop
-				fprintf(stderr,  "Could not write, buffer level is at %.2f%%\n", writeStat() * 100);
+				fprintf(stderr, "Could not write %zu bytes, buffer level is at %.2f%%\n", size, writeStat() * 100);
 				doConnect();
 			}
 		}
@@ -307,25 +297,27 @@ int AudioFile::setup(const std::string& path, size_t bufferSize, Mode mode, size
 	}
 	rtIdx = 0;
 	ramOnly = false;
-	ioBuffer = 0;
 	size_t numSamples = getLength() * getChannels();
-	if(kRead == mode && bufferSize * kNumBufs >= numSamples)
+	size_t numBufs = 10;
+	rtBuffer = 0;
+	ioBuffer = 0;
+	if(kRead == mode && bufferSize * numBufs >= numSamples)
 	{
 		ramOnly = true;
 		// empty other buffers, we will only use the first one
-		for(unsigned int n = 1; n < internalBuffers.size(); ++n)
-			internalBuffers[n].clear();
+		internalBuffers.resize(1);
 		// the actual audio content
 		internalBuffers[0].resize(numSamples);
 	} else {
+		internalBuffers.resize(numBufs);
 		for(auto& b : internalBuffers)
 			b.resize(bufferSize * getChannels());
 	}
-	ioBufferOld = ioBuffer;
 	if(kRead == mode)
 	{
 		// fill up the first buffer
-		io(internalBuffers[ioBuffer]);
+		io(internalBuffers[0]);
+		ioBuffer = 1;
 		// signal threadLoop() to start filling in the next buffer
 		scheduleIo();
 	}
@@ -354,15 +346,16 @@ int rt_fprintf(FILE *stream, const char *format, ...);
 
 void AudioFile::scheduleIo()
 {
-	if(ioBuffer == !ioBufferOld)
+	// here you could have a cond var or mutex that the io thread is blocking on.
+	// in our case we have a simple (and technically unsafe) shared variable
+	increment(rtBuffer);
+	if(rtBuffer == ioBuffer)
 	{
 		// if you don't have rt_fprintf, turn this into fprintf
 		if(virtualData)
 			rt_fprintf(stderr, "_______%.2f%%\n", virtualData->socket.writeStat() * 100);
 		rt_fprintf(stderr, "AudioFile: underrun detected on %s\n", path.c_str());
 	}
-	// schedule thread
-	ioBuffer = !ioBuffer;
 }
 
 static const long long unsigned int kNsInSec = 1000000000;
@@ -382,6 +375,12 @@ static long long unsigned int timespec_to_llu(const struct timespec *a)
 
 #include <time.h>
 
+template <typename T>
+void AudioFile::increment(T& bufferIdx)
+{
+	bufferIdx = (bufferIdx + 1) % internalBuffers.size();
+}
+
 void AudioFile::threadLoop()
 {
 	bool inited = false;
@@ -390,7 +389,7 @@ void AudioFile::threadLoop()
 	printBufferDetails = 1;
 	while(!stop)
 	{
-		if(ioBuffer != ioBufferOld)
+		if(ioBuffer != rtBuffer)
 		{
 			if(printBufferDetails && virtualData)
 				printf("buf: %5.2f%% -- ", virtualData->socket.writeStat() * 100);
@@ -407,6 +406,7 @@ void AudioFile::threadLoop()
 				}
 			}
 			io(internalBuffers[ioBuffer]);
+			increment(ioBuffer);
 			if(printBufferDetails)
 			{
 				if(clock_gettime(CLOCK_MONOTONIC, &end))
@@ -420,7 +420,6 @@ void AudioFile::threadLoop()
 				totalBusy += busy;
 				//printf("start: %llu, begin:%llu, end: %llu, totalBusy: %llu, totalRunning: %llu\n", timespec_to_llu(&start), timespec_to_llu(&begin), timespec_to_llu(&end), totalBusy, totalRunning);
 			}
-			ioBufferOld = ioBuffer;
 		}
 		else
 			usleep(50000);
@@ -511,7 +510,7 @@ void AudioFileReader::getSamples(float* dst, size_t samplesCount)
 	size_t n = 0;
 	while(n < samplesCount)
 	{
-		auto& inBuf = getRtBuffer();
+		auto& inBuf = internalBuffers[rtBuffer];
 		size_t inBufEnd = ramOnly ?
 			(loop ? loopStop * getChannels() : inBuf.size())
 			: inBuf.size();
@@ -534,7 +533,7 @@ void AudioFileReader::getSamples(float* dst, size_t samplesCount)
 				}
 			} else {
 				rtIdx = 0;
-				scheduleIo(); // this should give us a new inBuf
+				scheduleIo(); // this will give us a new rtBuffer
 			}
 		}
 		if(!done){
@@ -558,7 +557,7 @@ void AudioFileWriter::setSamples(float const * src, size_t samplesCount)
 	size_t n = 0;
 	while(n < samplesCount)
 	{
-		auto& outBuf = getRtBuffer();
+		auto& outBuf = internalBuffers[rtBuffer];
 		bool done = false;
 		for(; n < samplesCount && rtIdx < outBuf.size(); ++n)
 		{
@@ -568,7 +567,7 @@ void AudioFileWriter::setSamples(float const * src, size_t samplesCount)
 		if(rtIdx == outBuf.size())
 		{
 			rtIdx = 0;
-			scheduleIo(); // this should give us a new outBuf
+			scheduleIo(); // this will give us a new rtBuffer
 		}
 		if(!done){
 			break;

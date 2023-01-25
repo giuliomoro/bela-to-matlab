@@ -88,9 +88,11 @@ protected:
 		kWrite,
 		kWriteSocket,
 	} Mode;
-	enum { kNumBufs = 2};
 protected:
 	int setup(const std::string& path, size_t bufferSize, Mode mode, size_t channels = 0, unsigned int sampleRate = 0);
+	template <typename T>
+	void increment(T& bufferIdx);
+	std::vector<float>& getRtBuffer();
 public:
 	size_t getLength() const { return sfinfo.frames; };
 	size_t getChannels() const { return sfinfo.channels; };
@@ -100,10 +102,9 @@ private:
 	void cleanup();
 protected:
 	volatile size_t ioBuffer;
-	size_t ioBufferOld;
+	volatile size_t rtBuffer;
 	void scheduleIo();
-	std::vector<float>& getRtBuffer();
-	std::array<std::vector<float>,kNumBufs> internalBuffers;
+	std::vector<std::vector<float>> internalBuffers;
 	void threadLoop();
 	virtual void io(std::vector<float>& buffer) = 0;
 	std::thread diskIo;

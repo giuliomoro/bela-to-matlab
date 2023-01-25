@@ -14,7 +14,7 @@ unsigned int chs = 8;
 // size of internal buffer for writing to network and file.
 // It affects latency.
 // Increase if you get `AudioFile: underrun detected`
-unsigned int bufferFrames = 65536 * 2;
+unsigned int bufferFrames = 65536 / chs;
 
 bool setup(BelaContext *context, void *userData)
 {
