@@ -307,7 +307,18 @@ int AudioFile::setup(const std::string& path, size_t bufferFrames, Mode mode, si
 	rtIdx = 0;
 	ramOnly = false;
 	size_t numSamples = getLength() * getChannels();
-	size_t numBufs = 10;
+	// sf_buffer is libsndfile's internal buffer size (in bytes).
+	// the stock value is 8192 but we recompiled it with 65536.
+	// we want to have enough internal buffers to store bufferSize frames
+	// and each buffer should be no smaller than sf_buffer
+	//const size_t sf_buffer = 8192;
+	const size_t sf_buffer = 65536;
+	size_t kBytesPerSample = 2;
+	size_t numBytes = bufferFrames * getChannels() * kBytesPerSample;
+	size_t numBufs = numBytes / sf_buffer;
+	// need at least 2 buffers for this to work
+	if(numBufs < 2)
+		numBufs = 2;
 	rtBuffer = 0;
 	ioBuffer = 0;
 	if(kRead == mode && bufferFrames * numBufs >= numSamples)
@@ -320,7 +331,7 @@ int AudioFile::setup(const std::string& path, size_t bufferFrames, Mode mode, si
 	} else {
 		internalBuffers.resize(numBufs);
 		for(auto& b : internalBuffers)
-			b.resize(bufferSize * getChannels());
+			b.resize(numBytes / kBytesPerSample / numBufs);
 	}
 	if(kRead == mode)
 	{
