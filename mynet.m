@@ -1,47 +1,38 @@
-while(1)
-    if exist('t')
+while(1) % this loop allows automatic reconnecting in case of timeout
+    if exist('t', 'var') && isa(socket, 'tcpip')
         % properly close any open socket
-        fclose(t)
+        fclose(socket);
     end
-    t = tcpip('0.0.0.0', 4000, 'NetworkRole', 'server');
-    t.InputBufferSize = 8000000; % if buffer usage in the prints below goes above 60%, increase this and blocksize_bytes to avoid dropouts
-    nchs = 16; % number of channels
-    Fs = 44100;
+    socket = tcpip('0.0.0.0', 4000, 'NetworkRole', 'server');
+    socket.InputBufferSize = 8000000; % if buffer usage in the prints below goes above 60%, increase this and blocksize_bytes to avoid dropouts
+    nchs = 16; % number of channels. This must match the one on Bela
+    Fs = 44100; % sampling rate. This must match the one on Bela
     oneSecond = nchs * 2 * Fs;
     blocksize_bytes = oneSecond * 1; % number of bytes read at once. Larger blocks give higher latency but they may allow to avoid underruns.
     
     T = 1/Fs;
-    time = 0:T:(t.InputBufferSize/2/nchs)*T-T;
+    time = 0:T:(socket.InputBufferSize/2/nchs)*T-T;
     fprintf('Waiting for incoming connection ...')
-    fopen(t);
+    fopen(socket);
     fprintf('Connected\n')
-    timeout = 45;
+    timeout = 60;
     count = 0;
     samplesElapsed = 0;
     fullX = nan(0, nchs);
-    while(0)
-        if(t.BytesAvailable > 1)
-           fread(t, t.BytesAvailable);
-           pause(0.1);
-        end
-    end
     while (1)
-        if(t.BytesAvailable > blocksize_bytes)
-            if(t.BytesAvailable == t.InputBufferSize)
+        if(socket.BytesAvailable > blocksize_bytes)
+            if(socket.BytesAvailable == socket.InputBufferSize)
                 fprintf(2, 'Input buffer is full. A dropout likely occurred. Reduce in-loop computation and/or increase blocksize_bytes and/or increase t.InputBufferSize')
             end
-            fprintf('read: %d, buffer: %d bytes (%.0f%%)\n', blocksize_bytes, t.BytesAvailable, 100 * t.BytesAvailable / t.InputBufferSize);
-            data = fread(t, blocksize_bytes);
+            fprintf('read: %d, buffer: %d bytes (%.0f%%)\n', blocksize_bytes, socket.BytesAvailable, 100 * socket.BytesAvailable / socket.InputBufferSize);
+            data = fread(socket, blocksize_bytes);
             x = bytes_to_int16_to_float(data, nchs);
-            X = sum(x, 2);
-%             fullX = cat(1, fullX, x);
-%             samplesElapsed = samplesElapsed + size(x, 1);
-%             plot(samplesElapsed * T + time(1:size(x, 1)), x)
-%             xlabel('T[s]')
-%             ylabel('Amplitude')
+            samplesElapsed = samplesElapsed + size(x, 1);
+            % write your real-time processing code here. If you see "Input buffer is full" errors it probably means it's
+            % taking too long and you should reduce the computational load.
+            % the x matrix has nchs columns, each containing one audio channel
             count = 0;
         else
-%             fwrite(t, 'ping')
             pause(0.1)
             fprintf('.')
             count = count + 1;
