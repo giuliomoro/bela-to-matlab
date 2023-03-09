@@ -10,7 +10,7 @@ AudioFileWriter* fileOut;
 AudioFileWriter* serverOut;
 std::vector<float> fileBuffer;
 
-unsigned int chs = 8;
+unsigned int chs = 16;
 // size of internal buffer for writing to network and file.
 // It affects latency.
 // Increase if you get `AudioFile: underrun detected`
@@ -41,9 +41,9 @@ void render(BelaContext *context, void *userData)
 		for(unsigned int c = 0; c < chs; ++c)
 		{
 			//float out = oscs[c].process();
-			//fileBuffer[n * chs + c] = audioRead(context, n, c % context->audioInChannels);
-			//fileBuffer[n * chs + c] = out;
-			fileBuffer[n * chs + c] = (((context->audioFramesElapsed + n + c * 100) % 65536) - 32768) / 32768.f;
+			//fileBuffer[n * chs + c] = out; // send sine waves
+			fileBuffer[n * chs + c] = audioRead(context, n, c % context->audioInChannels);
+			//fileBuffer[n * chs + c] = (int16_t(((context->audioFramesElapsed + n + c * 100) / 100) % 40000) - 32768) / 32768.f; // send ramps so you can easily spot  dropouts
 		}
 	}
 	fileOut->setSamples(fileBuffer.data(), fileBuffer.size());
