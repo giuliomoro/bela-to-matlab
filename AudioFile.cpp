@@ -415,7 +415,7 @@ void AudioFile::threadLoop()
 				printf("buf: %5.2f%% -- ", virtualData->socket.writeStat() * 100);
 			struct timespec begin;
 			struct timespec end;
-			if(printBufferDetails)
+			if(printBufferDetails && virtualData)
 			{
 				if(clock_gettime(CLOCK_MONOTONIC, &begin))
 					fprintf(stderr, "Error in clock_gettime(): %d %s\n", errno, strerror(errno));
@@ -427,7 +427,7 @@ void AudioFile::threadLoop()
 			}
 			io(internalBuffers[ioBuffer]);
 			increment(ioBuffer);
-			if(printBufferDetails)
+			if(printBufferDetails && virtualData)
 			{
 				if(clock_gettime(CLOCK_MONOTONIC, &end))
 					fprintf(stderr, "Error in clock_gettime(): %d %s\n", errno, strerror(errno));
